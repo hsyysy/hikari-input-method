@@ -1,0 +1,16 @@
+/target
+
+# 词库数据不进仓库：
+#   - 原始 .dict.yaml 是 rime-ice 的产物（GPL-3.0），体积大（16.7 MB）
+#   - pinyin.bin 是编译产物（24.8 MB），可由 README「词典」一节的步骤重建
+/data/dict/
+
+# 开发记录与开发工具
+/dev/
+
+# 本地 cargo 镜像配置
+/.cargo/config.toml
+
+# Python 字节码缓存
+__pycache__/
+*.pyc

@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ime-protocol",
+    "crates/ime-ui",
+    "crates/ime-daemon",
+    "crates/pinyin-engine",
+    "tools/dict-builder",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# Wayland —— 版本均已 crates.io 核实（2026-09-24）
+wayland-client = "0.31.15"
+wayland-backend = "0.3.17"
+wayland-scanner = "0.31.11"
+# 需要 client + unstable 两个 feature 才能拿到 zp_text_input_v3 的枚举
+wayland-protocols = { version = "0.32.13", features = ["client", "unstable"] }
+
+ime-protocol = { path = "crates/ime-protocol" }
+ime-ui = { path = "crates/ime-ui" }

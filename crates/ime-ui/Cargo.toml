@@ -1,0 +1,17 @@
+[package]
+name = "ime-ui"
+description = "候选窗渲染：wl_shm 软件光栅化"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+wayland-client.workspace = true
+# memfd_create 用来建 wl_shm 的共享内存池（std 没有这个 API）
+libc = "0.2"
+# 8x8 位图字体：M2 只需要能显示几个 ASCII 字符来验证渲染链路，
+# 用它避免引入完整排版引擎。M4 画中文候选词时再换 cosmic-text。
+font8x8 = "0.3"
+# 中文候选词排版：自带 fontdb 系统字体加载 + swash 光栅化 + 字形回退
+cosmic-text = "0.19"

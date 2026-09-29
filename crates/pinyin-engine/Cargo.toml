@@ -1,0 +1,11 @@
+[package]
+name = "pinyin-engine"
+description = "拼音转换引擎：切分 + 查表 + 排序（纯逻辑，无 wayland 依赖）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# mmap 加载词典 blob：零解析、按需分页
+memmap2 = "0.9"

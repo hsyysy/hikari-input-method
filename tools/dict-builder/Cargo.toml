@@ -1,0 +1,10 @@
+[package]
+name = "dict-builder"
+description = "把 RIME 格式词库编译成 mmap 友好的二进制 blob"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+pinyin-engine = { path = "../../crates/pinyin-engine" }

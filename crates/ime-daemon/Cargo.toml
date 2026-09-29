@@ -1,0 +1,15 @@
+[package]
+name = "ime-daemon"
+description = "纯 Wayland 拼音输入法守护进程"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+ime-protocol.workspace = true
+ime-ui = { path = "../ime-ui" }
+pinyin-engine = { path = "../pinyin-engine" }
+wayland-client.workspace = true
+# keycode → keysym/字符：keymap 已从 grab 拿到，用 xkbcommon 正确解析
+xkbcommon = "0.9"

@@ -1,0 +1,23 @@
+[package]
+name = "ime-protocol"
+description = "Vendored Wayland input-method-v2 / virtual-keyboard-v1 protocol bindings"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# 为什么 vendor 这两个协议：它们不在任何已安装的协议包里。
+#   - wlr-protocols r112 已移除它们
+#   - wayland-protocols 1.49 从未包含 input-method-v2
+#   - wayland-protocols-wlr 0.3.12 也不含（已解包确认）
+# 权威副本位于 wlroots 仓库根目录的 protocol/；此处从本机 wlroots 源码拷贝，
+# 确保与运行中的合成器（hikari / wlroots 0.21）版本一致。
+
+[dependencies]
+wayland-client.workspace = true
+wayland-backend.workspace = true
+# 注意：0.31 的 wayland-scanner 是【过程宏】，在源码中展开，
+# 不是 build.rs 代码生成 —— 故列为普通依赖而非 build-dependency。
+wayland-scanner.workspace = true
+# text_input_enums 用（要的是枚举，不是接口，见 lib.rs 说明）
+wayland-protocols.workspace = true
