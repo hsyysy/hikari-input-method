@@ -22,6 +22,27 @@ pub enum Lang {
     English,
 }
 
+/// 一个应用（wayland client）各自的输入法状态。
+///
+/// 「按应用记住状态」要存的就是这一对 —— 只存总开关不够：
+/// 在 A 里 Shift 切到英文，切回 A 就该还是英文。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClientState {
+    pub enabled: bool,
+    pub lang: Lang,
+}
+
+impl Default for ClientState {
+    /// 没见过的新应用一律「关闭 + 中文」—— 和合成器刚起来时一致。
+    /// 默认关闭的理由见 `Composer::new`：一上来就吃字母是很糟的体验。
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            lang: Lang::Chinese,
+        }
+    }
+}
+
 /// 选中一条候选的结果（见 [`Composer::choose`]）
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Choice {
@@ -146,6 +167,28 @@ impl Composer {
         // 否则松手时会**额外**再切一次中英（把刚复位的中文又切回英文）。
         self.note_other_key();
         pending
+    }
+
+    /// 当前状态的快照，供「按应用记住状态」存回各自那一格。
+    pub fn state(&self) -> ClientState {
+        ClientState {
+            enabled: self.enabled,
+            lang: self.lang,
+        }
+    }
+
+    /// 切到另一个应用：套用它的状态，并**清空**当前输入。
+    ///
+    /// 清空是必须的 —— 上一个应用没拼完的 `zhe` 跟过来只会让人困惑。
+    /// （合成器失焦时已经让应用丢掉 preedit 了，缓冲若还留着两边就对不上。）
+    ///
+    /// 同时抹掉「Shift 单独按」的待定状态：切应用时用户很可能正按着 Shift，
+    /// 松手时不该被算成一次中英切换。
+    pub fn restore(&mut self, state: ClientState) {
+        self.enabled = state.enabled;
+        self.lang = state.lang;
+        self.clear();
+        self.note_other_key();
     }
 
     #[allow(dead_code)] // M5 翻页/状态显示会用到
@@ -840,5 +883,82 @@ mod tests {
         c.clear();
         assert!(!c.is_composing());
         assert_eq!(c.preedit_display(), "");
+    }
+
+    // ─────────── 按应用记住状态 ───────────
+
+    /// 新应用一律「关闭 + 中文」—— 不能一上来就吃字母
+    #[test]
+    fn default_client_state_is_off_and_chinese() {
+        let s = ClientState::default();
+        assert!(!s.enabled, "新应用默认关闭");
+        assert_eq!(s.lang, Lang::Chinese);
+    }
+
+    /// 快照 / 恢复要完整带回「总开关 **和** 中英」——
+    /// 只带总开关的话，在 A 里 Shift 切到英文、切回来就丢了
+    #[test]
+    fn state_round_trips_enabled_and_lang() {
+        let mut c = composer_awake();
+
+        // 弄成「开启 + 英文」
+        c.shift_pressed(42);
+        assert_eq!(c.shift_released(42), ShiftTap::Lang);
+        assert!(c.is_enabled());
+        assert_eq!(c.lang, Lang::English);
+
+        let saved = c.state();
+        assert!(saved.enabled);
+        assert_eq!(saved.lang, Lang::English);
+
+        // 换成另一个应用的状态
+        c.restore(ClientState::default());
+        assert!(!c.is_enabled());
+        assert_eq!(c.lang, Lang::Chinese);
+
+        // 切回来
+        c.restore(saved);
+        assert_eq!(c.state(), saved, "恢复后应回到存档时的状态");
+        assert!(c.is_enabled(), "存档是「开启」");
+        assert_eq!(c.lang, Lang::English, "存档是「英文」");
+        assert!(
+            !c.is_chinese_active(),
+            "「开启 + 英文」不是中文态，不该能打拼音"
+        );
+
+        // 中文态的存档也要原样回来（这条才是「切回来还能打中文」）
+        let chinese = ClientState {
+            enabled: true,
+            lang: Lang::Chinese,
+        };
+        c.restore(chinese);
+        assert_eq!(c.state(), chinese);
+        assert!(c.is_chinese_active(), "恢复中文态后应该能打拼音");
+    }
+
+    /// 切应用要**清空**未拼完的拼音 —— 上一个应用没打完的 `zhe` 不该跟过来
+    #[test]
+    fn restore_clears_the_buffer() {
+        let mut c = composer_awake();
+        type_str(&mut c, "zheli");
+        assert!(c.is_composing());
+
+        c.restore(ClientState::default());
+        assert!(!c.is_composing(), "缓冲该被清掉");
+        assert_eq!(c.preedit_display(), "");
+    }
+
+    /// `restore` 要抹掉「Shift 单独按」的待定状态 ——
+    /// 切应用时用户很可能正按着 Shift，松手不该被算成一次中英切换
+    #[test]
+    fn restore_cancels_a_pending_shift_tap() {
+        let mut c = composer_awake();
+        c.shift_pressed(42);
+        c.restore(ClientState::default());
+        assert_eq!(
+            c.shift_released(42),
+            ShiftTap::Nothing,
+            "切应用时按着的 Shift，松手不该触发中英切换"
+        );
     }
 }

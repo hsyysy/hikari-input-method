@@ -67,6 +67,13 @@ tools/ime-launch.sh --stop
 
 **合成器启动时输入法是关闭的**，按 `Ctrl+Space` 唤醒。
 
+**开关按应用分开记**：每个应用各自一份状态，新开的默认关闭；在 A 里打开
+不影响 B，切回 A 还是离开时的样子（包括用 `Shift` 切到的中英）。
+未拼完的拼音在切换应用时丢弃，不会跟着跑到另一个窗口。
+
+> 这需要合成器实现 hikari 的 `hikari_input_method_v1` 扩展（见下）。
+> 没有它时退化成**全局一个开关** —— 功能不受影响，只是所有窗口共用状态。
+
 | 按键 | 作用 |
 |---|---|
 | `Ctrl+Space` | 总开关：开 / 关输入法 |
@@ -117,6 +124,12 @@ zheli        → 这里  哲理  啫喱  …  这  着  者
 
 本输入法依赖合成器提供 `zwp_input_method_manager_v2` 与
 `zwp_virtual_keyboard_manager_v1`，并把 `text-input-v3` 客户端的事件中继过来。
+
+此外**可选**依赖 hikari 私有的 `hikari_input_method_v1`（[协议定义][proto]）：
+标准的 `zwp_input_method_v2` 只说「有个文本输入要你了」，不带客户端身份，
+所以「按应用记住状态」只能靠这个扩展补。它不存在时不报错，只是退回全局开关。
+
+[proto]: https://github.com/hsyysy/hikari/blob/master/protocol/hikari-input-method-v1.xml
 
 所用的 hikari fork：<https://github.com/hsyysy/hikari>。该分支另有一组与本
 输入法配合的改动（虚拟键盘不再抢占 seat 键盘以消除 keymap 广播风暴、候选窗

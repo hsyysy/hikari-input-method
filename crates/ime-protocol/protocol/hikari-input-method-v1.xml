@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="hikari_input_method_v1">
+  <description summary="tell an input method which client is focused">
+    An input method needs to know which application it is typing into.
+
+    The standard input-method-v2 protocol deliberately does not say: its
+    activate/deactivate events carry no arguments, so a client sees "a text
+    input wants you" but not whose text input it is.
+
+    hikari exposes that missing piece here. An input method binds this global
+    and receives an opaque identifier for the wl_client owning the text input
+    that is currently focused. The identifier is assigned by the compositor and
+    stays valid for as long as that client is connected, so an input method can
+    keep per-application state and restore it when the user switches back.
+
+    The events here are a hint for input methods; they carry no protocol
+    obligations and may be ignored. Compositors are free not to implement this
+    protocol at all, which is why clients must treat the global as optional.
+  </description>
+
+  <interface name="hikari_input_method_v1" version="1">
+    <description summary="per-client focus notifications">
+      One object per input method client. The compositor sends focused_client
+      whenever a text input starts being focused, and client_gone when a client
+      for which an identifier was allocated disconnects. A client_gone event
+      may be sent even if this object did not receive focused_client for that
+      identifier.
+    </description>
+
+    <event name="focused_client">
+      <description summary="the client that now owns the focused text input">
+        Sent immediately before the corresponding zwp_input_method_v2.activate
+        event, so a client that reads events in order always knows which
+        application the following activate refers to. If the compositor cannot
+        allocate an identifier, it may still send activate without a preceding
+        focused_client; in that case the input method has no new client identity
+        for that activation.
+
+        It is also sent right after binding, if a text input is focused at that
+        moment, so a late-binding client does not have to wait for the next
+        focus change to learn the current one.
+
+        id is assigned by the compositor and is never 0. It stays valid until a
+        client_gone event with the same id arrives. The same client always gets
+        the same id, and ids are never reused within a compositor session.
+      </description>
+      <arg name="id" type="uint" summary="opaque client identifier, never 0"/>
+    </event>
+
+    <event name="client_gone">
+      <description summary="a client with an allocated identifier disconnected">
+        The client identified by id is gone; any state kept for it can be
+        dropped. No further focused_client event will carry this id.
+
+        This event can be sent to a bound object that never received
+        focused_client for id, for example if the identifier was allocated
+        before that object was bound. Removing unknown state is a no-op.
+
+        Note that a client may still be the focused one when it disconnects;
+        the compositor will follow up with a deactivate (or another
+        focused_client) as focus moves.
+      </description>
+      <arg name="id" type="uint" summary="an allocated client identifier"/>
+    </event>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the object"/>
+    </request>
+  </interface>
+</protocol>

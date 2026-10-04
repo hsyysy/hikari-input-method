@@ -55,6 +55,44 @@ pub mod input_method {
     pub use self::zwp_input_method_v2::ZwpInputMethodV2;
 }
 
+/// hikari 私有协议：告诉输入法**当前聚焦的是哪个客户端**。
+///
+/// # 为什么需要它
+///
+/// `zwp_input_method_v2` 的 `activate` / `deactivate` **不带任何参数**，
+/// 输入法只知道「有个文本输入要你了」，不知道**是谁**。而本输入法要按应用
+/// 记住状态（在 A 里开了中文，切到 B 不该跟着开），所以这个身份只能由合成器补。
+///
+/// 这不是标准协议，**只有 hikari 实现它**。因此这个 global 是可选的：
+/// bind 不到就退化成「全局一个开关」，行为和以前完全一样。见 `main.rs` 里
+/// `switch_client` / `forget_client` 的用法。
+///
+/// # 两条要小心的行为（协议 XML 里写明了）
+///
+/// - **`activate` 可能没有前置的 `focused_client`** —— 合成器分配 id 失败
+///   （OOM 或 id 用尽）时会这样。此时输入法拿不到新身份，只能沿用当前状态。
+/// - **`client_gone` 可能带一个从没见过的 id** —— 比如 id 是在本对象 bind
+///   之前分配的。清理未知状态必须是 no-op。
+///
+/// 与本仓库另外两个模块不同，这个 XML 的权威副本在 **hikari 仓库**的
+/// `protocol/hikari-input-method-v1.xml`，这里是从那边拷的，两边要保持一致。
+pub mod hikari_input_method {
+    use wayland_client;
+
+    // 与另外两个模块不同，这里**不需要**引入 `wayland_client::protocol::*`
+    // 和 `__interfaces::*` —— 本协议不引用 `wl_surface` 之类的外部接口，
+    // 没有跨接口参数，生成的代码用不到它们（引入了反而报 unused import）。
+    pub mod __interfaces {
+        wayland_scanner::generate_interfaces!("./protocol/hikari-input-method-v1.xml");
+    }
+
+    use self::__interfaces::*;
+
+    wayland_scanner::generate_client_code!("./protocol/hikari-input-method-v1.xml");
+
+    pub use self::hikari_input_method_v1::HikariInputMethodV1;
+}
+
 /// `zwp_virtual_keyboard_v1` —— 把按键还给应用的唯一途径。
 pub mod virtual_keyboard {
     use wayland_client;

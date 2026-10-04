@@ -23,7 +23,7 @@
 //!
 //! 「静默失效」的路径各写一条显式日志 + 断言，而不是靠"记得"。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::os::fd::AsFd;
 use std::process::ExitCode;
 
@@ -31,7 +31,7 @@ mod compose;
 mod popup;
 mod xkb;
 
-use compose::{Choice, Composer, ShiftTap};
+use compose::{Choice, ClientState, Composer, ShiftTap};
 use ime_ui::CandidateView;
 use popup::Popup;
 use xkb::Xkb;
@@ -39,6 +39,7 @@ use xkb::Xkb;
 use ime_protocol::input_method::{
     ZwpInputMethodKeyboardGrabV2, ZwpInputMethodManagerV2, ZwpInputMethodV2,
 };
+use ime_protocol::hikari_input_method::HikariInputMethodV1;
 use ime_protocol::virtual_keyboard::{ZwpVirtualKeyboardManagerV1, ZwpVirtualKeyboardV1};
 use ime_ui::{M2_HEIGHT, M2_WIDTH, SUPERSAMPLE};
 
@@ -130,6 +131,19 @@ struct State {
     /// 上次发出的 preedit，用于去重（避免每键都 commit 一次）
     last_preedit: String,
 
+    // ── 按应用记住状态（hikari 的 `hikari_input_method_v1` 扩展）──
+    /// hikari 的客户端身份扩展对象。bind 不到就是 `None`（老 hikari / 别的合成器），
+    /// 此时下面两个字段一直是空的，行为退化成「全局一个开关」。
+    ///
+    /// **必须存着** —— wayland-client 的代理一 drop 就会销毁对应的 wayland 对象，
+    /// 那样就再也收不到 `focused_client` 了。
+    #[allow(dead_code)]
+    hikari_im: Option<HikariInputMethodV1>,
+    /// 每个应用各自的输入法状态，键是 hikari 给的客户端 id。
+    clients: HashMap<u32, ClientState>,
+    /// 当前聚焦的应用 id；`None` = 不知道是谁（扩展不可用，或那个应用刚退出）。
+    current_client: Option<u32>,
+
     stats: Stats,
 }
 
@@ -192,6 +206,59 @@ impl State {
             Some(_) => "开启（英文，Shift 可切回中文）",
             None => "无拼音引擎（纯透传）",
         }
+    }
+
+    // ── 按应用记住状态（hikari 的 `hikari_input_method_v1` 扩展）──
+
+    /// 把 composer 当前的状态存回 `current_client` 那一格。
+    ///
+    /// 没有扩展（`current_client == None`）时是 no-op，所以调用点不用先判断。
+    fn save_current_client(&mut self) {
+        let Some(id) = self.current_client else {
+            return;
+        };
+        let Some(state) = self.composer.as_ref().map(|c| c.state()) else {
+            return;
+        };
+        self.clients.insert(id, state);
+    }
+
+    /// 焦点换到了另一个应用（`focused_client`）。
+    ///
+    /// ⚠️ 同一个应用**可能重复收到**：应用内部从一个输入框换到另一个，
+    /// 也会走一次 enable → activate。这时绝不能清缓冲 —— 用户正拼着的拼音
+    /// 会被这次 enable/disable 白白清掉。
+    fn switch_client(&mut self, id: u32, qh: &QueueHandle<Self>) {
+        if self.current_client == Some(id) {
+            // 还是同一个应用：只把状态刷回表里（用户可能刚按过 Ctrl+Space），
+            // 其余什么也不动。
+            self.save_current_client();
+            return;
+        }
+
+        self.save_current_client();
+        self.current_client = Some(id);
+
+        let remembered = self.clients.get(&id).copied().unwrap_or_default();
+        if let Some(c) = self.composer.as_mut() {
+            c.restore(remembered);
+        }
+        info!("焦点应用 → id={id}（{}）", self.enabled_desc());
+        self.refresh_ui(qh);
+    }
+
+    /// 某个应用退出了（`client_gone`）。
+    ///
+    /// ⚠️ 协议允许这个 id **是我们从没见过的**（比如它是在我们 bind 之前
+    /// 分配的），所以必须幂等。
+    fn forget_client(&mut self, id: u32) {
+        let had = self.clients.remove(&id).is_some();
+        if self.current_client == Some(id) {
+            // 它已经没了，别再往那一格里存。但**当前状态不动** ——
+            // 用户还在这个窗口里打字，输入法不该因为应用要退出就变样。
+            self.current_client = None;
+        }
+        vlog!("应用 id={id} 已退出（原先记着状态: {had}）");
     }
 
     /// 处理按下。返回 `true` = 输入法消费（**不转发给应用**）。
@@ -740,6 +807,31 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for State {
     }
 }
 
+// ── hikari 私有扩展：当前聚焦的是哪个客户端 ──
+//
+// 这个协议是**可选**的：bind 不到就永远不进这里，行为退回全局单开关。
+
+impl Dispatch<HikariInputMethodV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &HikariInputMethodV1,
+        event: <HikariInputMethodV1 as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        use ime_protocol::hikari_input_method::hikari_input_method_v1::Event;
+        match event {
+            // 紧挨在对应的 `activate` 之前到达，所以顺序读就一定对得上
+            Event::FocusedClient { id } => state.switch_client(id, qh),
+            Event::ClientGone { id } => state.forget_client(id),
+            // 生成的 enum 是 #[non_exhaustive]：以后 hikari 加事件时
+            // 老客户端不该编译失败，忽略未知事件即可。
+            _ => {}
+        }
+    }
+}
+
 // ── input method：状态机 ──
 
 impl Dispatch<ZwpInputMethodV2, ()> for State {
@@ -773,6 +865,11 @@ impl Dispatch<ZwpInputMethodV2, ()> for State {
 
             Event::Deactivate => {
                 state.stats.deactivates += 1;
+
+                // 失焦：把这个应用的状态存回它那一格，切回来时才好恢复。
+                // 放在 clear() 之前之后都行 —— `clear()` 只清缓冲，不动
+                // enabled/lang，而存的就是这两个。
+                state.save_current_client();
 
                 // ① 先补发未释放按键（在 release grab 之前，此时 grab 还有效）
                 state.flush_pressed_keys();
@@ -868,6 +965,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let vk_manager: ZwpVirtualKeyboardManagerV1 = globals.bind(&qh, 1..=1, ())?;
     let compositor = popup::bind_compositor(&globals, &qh)?;
 
+    // hikari 的「当前聚焦的是哪个客户端」扩展。**可选** ——
+    // 没有它（老 hikari、或别的合成器）就退化成「全局一个开关」，行为同以前。
+    let hikari_im = match globals.bind::<HikariInputMethodV1, _, _>(&qh, 1..=1, ()) {
+        Ok(g) => {
+            info!("已绑定 hikari 扩展：输入法状态对各应用分别记忆");
+            Some(g)
+        }
+        Err(_) => {
+            info!("合成器未提供 hikari_input_method_v1 —— 输入法状态对所有窗口共用");
+            None
+        }
+    };
+
     // 虚拟键盘：**进程级创建一次**（§5.1 B）
     let vk = vk_manager.create_virtual_keyboard(&seat, &qh, ());
 
@@ -923,6 +1033,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         composer,
         popup_visible: false,
         last_preedit: String::new(),
+        hikari_im,
+        clients: HashMap::new(),
+        current_client: None,
         stats: Stats::default(),
     };
 
